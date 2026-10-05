@@ -33,6 +33,11 @@
 #if defined(HAVE_GTK)
 # include "gtkbits.h"
 #endif
+#ifdef MISTER_HYBRID
+// MiSTer hybrid core: the SDL "mister" drivers show the window on the core's
+// 15kHz screen and deliver its input (Hybrid_MiSTer, sdl2/)
+# include <mister_hybrid.h>
+#endif
 
 static int backgroundidle = 0;
 static char apptitle[256] = "Build Engine";
@@ -46,6 +51,10 @@ static SDL_Surface *sdl_surface;	// For non-GL 8-bit mode output.
 static SDL_Surface *sdl_appicon;
 static int usesdlrenderer = 0;
 static unsigned char *frame;
+#ifdef MISTER_HYBRID
+static int misterpalettechanged = 1;
+static int misterframestats = 0;
+#endif
 static float curshadergamma = 1.f, cursysgamma = -1.f;
 
 static struct displayinfo {
@@ -68,6 +77,11 @@ static int set_glswapinterval(const osdfuncparm_t *parm);
 static char keynames[256][24];
 static char mouseacquired=0,moustat=0;
 static SDL_GameController *controller = NULL;
+#ifdef MISTER_HYBRID
+static SDL_Joystick *misterjoystick = NULL;
+static int misterjoybuttons = 0, misterjoyhat = 0;
+static void misterjoyupdate(void);
+#endif
 
 struct keytranslate {
 	unsigned char normal;
@@ -97,6 +111,16 @@ int wm_msgbox(const char *name, const char *fmt, ...)
 	va_end(va);
 
 	if (rv < 0) return -1;
+
+#ifdef MISTER_HYBRID
+	// on the screen of the core, until a button is pressed
+	if (MH_Open()) {
+		buildprintf("%s: %s\n", name, buf);
+		MH_UI_Message(name, buf, MH_UI_WAIT | MH_UI_ERROR);
+		free(buf);
+		return 0;
+	}
+#endif
 
 	do {
 		rv = 0;
@@ -257,6 +281,16 @@ int main(int argc, char *argv[])
 
 	buildkeytranslationtable();
 
+#ifdef MISTER_HYBRID
+	// the launcher keeps what is printed as the log: nothing of it is to be
+	// lost if the game ends badly
+	setvbuf(stdout, NULL, _IOLBF, 0);
+	misterframestats = getenv("MISTER_HYBRID_STATS") != NULL;
+	// 8-bit frames, the core does the palette lookup; one frame per field
+	SDL_SetHint("SDL_MISTER_VIDEO_FORMAT", "INDEX8");
+	SDL_SetHint("SDL_MISTER_VSYNC", "1");
+#endif
+
 	// SDL must be initialised before GTK or else crashing will ensue.
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER)) {
 		buildprintf("Early initialisation of SDL failed! (%s)\n", SDL_GetError());
@@ -289,7 +323,9 @@ int main(int argc, char *argv[])
 	// This avoids doubled character input in the (OSX) startup window's edit fields.
 	SDL_EventState(SDL_TEXTINPUT, SDL_IGNORE);
 
+#ifndef MISTER_HYBRID
 	loadappicon();
+#endif
 
 	r = app_main(_buildargc, (char const * const*)_buildargv);
 
@@ -428,6 +464,20 @@ int initinput(void)
 		strncpy(keynames[ keytranslation[i].normal ], SDL_GetScancodeName(i), sizeof(keynames[i])-1);
 	}
 
+#ifdef MISTER_HYBRID
+	// Player 1 of the core, see sdlayer.h for the layout of joyb
+	if (SDL_NumJoysticks() > 0) {
+		misterjoystick = SDL_JoystickOpen(0);
+	}
+	if (misterjoystick) {
+		buildprintf("Using joystick %s\n", SDL_JoystickName(misterjoystick));
+		inputdevices |= 4;
+		joynumaxes = 4;
+		joynumbuttons = MISTERJOY_NUMBUTTONS;
+	}
+	return 0;
+#endif
+
 	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER)) {
 		int flen, fh;
 		char *dbuf = NULL;
@@ -495,6 +545,12 @@ void uninitinput(void)
 		SDL_GameControllerClose(controller);
 		controller = NULL;
 	}
+#ifdef MISTER_HYBRID
+	if (misterjoystick) {
+		SDL_JoystickClose(misterjoystick);
+		misterjoystick = NULL;
+	}
+#endif
 }
 
 const char *getkeyname(int num)
@@ -601,6 +657,28 @@ static Uint32 timerlastsample=0;
 static Uint32 timerticspersec=0;
 static void (*usertimercallback)(void) = NULL;
 
+#ifdef MISTER_HYBRID
+// The game's clock is the field counter of the core, so that every frame is
+// the same time after the one before: 6.25MHz / (400 * 262) = 59.64 fields
+// per second.
+#define MISTER_FIELD_NUM 262
+#define MISTER_FIELD_DEN 15625
+static Uint32 timerfieldbase;
+static int timerfraction;
+
+// ticks * 65536 since inittimer()
+static Uint64 mistertimer(void)
+{
+	Uint32 fields = MH_FieldCounter() - timerfieldbase;
+	return (((Uint64)fields * timerticspersec * MISTER_FIELD_NUM) << 16) / MISTER_FIELD_DEN;
+}
+
+int gettimerfraction(void)
+{
+	return timerfraction;
+}
+#endif
+
 //
 // inittimer() -- initialise timer
 //
@@ -613,6 +691,12 @@ int inittimer(int tickspersecond, void(*callback)(void))
 	timerfreq = SDL_GetPerformanceFrequency();
 	timerticspersec = tickspersecond;
 	timerlastsample = (Uint32)(SDL_GetPerformanceCounter() * timerticspersec / timerfreq);
+#ifdef MISTER_HYBRID
+	if (MH_IsOpen()) {
+		timerfieldbase = MH_FieldCounter();
+		timerlastsample = 0;
+	}
+#endif
 
 	usertimercallback = callback;
 
@@ -638,6 +722,13 @@ void sampletimer(void)
 
 	if (!timerfreq) return;
 
+#ifdef MISTER_HYBRID
+	if (MH_IsOpen()) {
+		Uint64 now = mistertimer();
+		n = (int)((Uint32)(now >> 16) - timerlastsample);
+		timerfraction = (int)(now & 65535);
+	} else
+#endif
 	n = (int)(SDL_GetPerformanceCounter() * timerticspersec / timerfreq) - timerlastsample;
 	if (n>0) {
 		totalclock += n;
@@ -730,6 +821,13 @@ void getvalidmodes(void)
 	int i, n, maxx, maxy;
 
 	if (validmodecnt) return;
+
+#ifdef MISTER_HYBRID
+	// The screen of the core
+	addvalidmode(MH_WIDTH, MH_HEIGHT, 8, 0, 0, 0, -1);
+	sortvalidmodes();
+	return;
+#endif
 
 	// Fullscreen modes
 	for (i=0; i<displaycnt; i++) {
@@ -876,6 +974,11 @@ int setvideomode(int xdim, int ydim, int bitspp, int fullsc)
 			if (bitspp > 8) flags |= SDL_WINDOW_FULLSCREEN;
 			else flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 		}
+#ifdef MISTER_HYBRID
+		// the size of the window picks the core's video mode
+		winx = winy = 0;
+		flags = SDL_WINDOW_HIDDEN;
+#endif
 
 		sdl_window = SDL_CreateWindow(wintitle, winx, winy, winw, winh, flags);
 		if (!sdl_window) {
@@ -909,6 +1012,11 @@ int setvideomode(int xdim, int ydim, int bitspp, int fullsc)
 		// Round up to a multiple of 4.
 		pitch = (((xdim|1) + 4) & ~3);
 
+#ifdef MISTER_HYBRID
+		// copied to the window surface, which is 8-bit as well
+		if (1) {
+		} else
+#endif
 #if USE_OPENGL
 		if (glunavailable) {
 #endif
@@ -1081,6 +1189,51 @@ void showframe(void)
 	SDL_Rect destrect;
 	SDL_Surface *winsurface = NULL;
 
+#ifdef MISTER_HYBRID
+	winsurface = SDL_GetWindowSurface(sdl_window);
+	if (!winsurface || !winsurface->format->palette) {
+		debugprintf("Could not get an 8-bit window surface: %s\n", SDL_GetError());
+		return;
+	}
+	if (misterpalettechanged) {
+		SDL_Color colors[256];
+		for (x = 0; x < 256; x++) {
+			colors[x].r = curpalettefaded[x].r;
+			colors[x].g = curpalettefaded[x].g;
+			colors[x].b = curpalettefaded[x].b;
+			colors[x].a = 255;
+		}
+		SDL_SetPaletteColors(winsurface->format->palette, colors, 0, 256);
+		misterpalettechanged = 0;
+	}
+	pixels = (unsigned char *)winsurface->pixels;
+	in = frame;
+	rendx = min(xres, winsurface->w);
+	for (y = min(yres, winsurface->h); y > 0; y--) {
+		memcpy(pixels, in, rendx);
+		pixels += winsurface->pitch;
+		in += bytesperline;
+	}
+	// waits for the next field of the core
+	SDL_UpdateWindowSurface(sdl_window);
+	if (misterframestats) {
+		// development: how many fields went by without a new frame
+		static Uint32 lastfield, sincefield, frames, missed;
+		Uint32 field = MH_FieldCounter();
+
+		if (frames > 0 && field - lastfield > 1) missed += field - lastfield - 1;
+		if (frames == 0) sincefield = field;
+		lastfield = field;
+		frames++;
+		if (field - sincefield >= 600) {
+			buildprintf("mister: %u frames in %u fields, %u fields missed\n", frames - 1, field - sincefield, missed);
+			frames = 0;
+			missed = 0;
+		}
+	}
+	return;
+#endif
+
 	if (usesdlrenderer) {
 		if (SDL_LockTexture(sdl_texture, NULL, (void**)&pixels, &pitch)) {
 			debugprintf("Could not lock texture: %s\n", SDL_GetError());
@@ -1161,6 +1314,9 @@ void showframe(void)
 int setpalette(int start, int num, unsigned char *dapal)
 {
 	(void)start; (void)num; (void)dapal;
+#ifdef MISTER_HYBRID
+	misterpalettechanged = 1;
+#endif
 #if USE_OPENGL
 	if (!glunavailable) {
 		glbuild_update_8bit_palette(&gl8bit, curpalettefaded);
@@ -1401,6 +1557,32 @@ int handleevents(void)
 				}
 				break;
 
+#ifdef MISTER_HYBRID
+			case SDL_JOYAXISMOTION:
+				if (ev.jaxis.which == SDL_JoystickInstanceID(misterjoystick) && ev.jaxis.axis < 4) {
+					joyaxis[ ev.jaxis.axis ] = ev.jaxis.value;
+				}
+				break;
+
+			case SDL_JOYHATMOTION:
+				if (ev.jhat.which == SDL_JoystickInstanceID(misterjoystick) && ev.jhat.hat == 0) {
+					misterjoyhat = ev.jhat.value;
+					misterjoyupdate();
+				}
+				break;
+
+			case SDL_JOYBUTTONDOWN:
+			case SDL_JOYBUTTONUP:
+				if (ev.jbutton.which == SDL_JoystickInstanceID(misterjoystick) && ev.jbutton.button < 32) {
+					if (ev.jbutton.state == SDL_PRESSED)
+						misterjoybuttons |= 1 << ev.jbutton.button;
+					else
+						misterjoybuttons &= ~(1 << ev.jbutton.button);
+					misterjoyupdate();
+				}
+				break;
+#endif
+
 			case SDL_CONTROLLERAXISMOTION:
 				if (appactive) {
 					joyaxis[ ev.caxis.axis ] = ev.caxis.value;
@@ -1437,6 +1619,27 @@ int handleevents(void)
 	return rv;
 }
 
+
+#ifdef MISTER_HYBRID
+// joyb from the buttons and the d-pad of the core's joystick
+static void misterjoyupdate(void)
+{
+	int i, b = 0;
+
+	for (i = 0; i < MISTERJOY_NUMACTIONS; i++) {
+		if (misterjoybuttons & (1 << i)) b |= 1 << (MISTERJOY_ACTION1 + i);
+	}
+	// SDL joystick buttons 28 and 29: Menu OK and Menu Back of the OSD. The
+	// core's own Menu OK/Back buttons follow the actions.
+	if (misterjoybuttons & ((1 << 28) | (1 << MISTERJOY_NUMACTIONS))) b |= 1 << MISTERJOY_MENUOK;
+	if (misterjoybuttons & ((1 << 29) | (1 << (MISTERJOY_NUMACTIONS + 1)))) b |= 1 << MISTERJOY_MENUBACK;
+	if (misterjoyhat & SDL_HAT_UP) b |= 1 << MISTERJOY_DPADUP;
+	if (misterjoyhat & SDL_HAT_DOWN) b |= 1 << MISTERJOY_DPADDOWN;
+	if (misterjoyhat & SDL_HAT_LEFT) b |= 1 << MISTERJOY_DPADLEFT;
+	if (misterjoyhat & SDL_HAT_RIGHT) b |= 1 << MISTERJOY_DPADRIGHT;
+	joyb = b;
+}
+#endif
 
 static int buildkeytranslationtable(void)
 {
