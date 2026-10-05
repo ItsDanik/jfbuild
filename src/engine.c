@@ -7903,6 +7903,13 @@ int setgamemode(int dafullscreen, int daxdim, int daydim, int dabpp)
 	// vertically a little.
 	widescreen = 0;
 	tallscreen = 0;
+#ifdef MISTER_HYBRID
+	// The core shows every mode on a 4:3 screen: 640x200 has two pixels in
+	// the place of each pixel of 320x200
+	if (1) {
+		pixelaspect = divscale16(ydim*320L,xdim*200L);
+	} else
+#endif
 	if ((xdim == 320 && ydim == 200) || (xdim == 640 && ydim == 400)) {
 		pixelaspect = 65536;
 	} else {

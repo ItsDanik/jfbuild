@@ -823,8 +823,9 @@ void getvalidmodes(void)
 	if (validmodecnt) return;
 
 #ifdef MISTER_HYBRID
-	// The screen of the core
+	// The video modes of the core
 	addvalidmode(MH_WIDTH, MH_HEIGHT, 8, 0, 0, 0, -1);
+	addvalidmode(MH_MAX_WIDTH, MH_MAX_HEIGHT, 8, 0, 0, 0, -1);
 	sortvalidmodes();
 	return;
 #endif
