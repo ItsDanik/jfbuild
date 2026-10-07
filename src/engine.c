@@ -4408,6 +4408,38 @@ static void dorotatesprite(int sx, int sy, int z, short a, short picnum, signed 
 
 	cosang = sintable[(a+512)&2047]; sinang = sintable[a&2047];
 
+#ifdef MISTER_HYBRID
+	// MiSTer: the art is shown as it was drawn, never stretched down the
+	// screen. A row of it is a line of the screen, a column xdim/320 pixels
+	// (the core shows 640 pixels in the place of 320). On a screen of more
+	// than 200 lines:
+	// - with 8 in dastat (the coordinates of a 320x200 screen) the 200 lines
+	//   are in the middle of the screen, or at its top or bottom
+	//   (ROTATESPRITE_TOP, ROTATESPRITE_BOTTOM)
+	// - without (the coordinates of a 320x200 screen put on the view, which
+	//   is how a game draws its weapons) they are as far from the bottom of
+	//   the view as with 200 lines. In a view that is not as wide as the
+	//   screen the art is smaller by that much, as it always was.
+	if ((dastat&2) != 0)
+	{
+		if ((dastat&8) == 0)
+		{
+			x = divscale16(xdimen,xdim);
+			sx = ((cx1+cx2+2)<<15)+scale(sx-(320<<15),xdimen,320);
+			sy = ((cy1+cy2+2)<<15)+mulscale16(sy-(200<<15)+((ydim-200)<<15),x);
+		}
+		else
+		{
+			x = 65536;
+			sx = (xdim<<15)+32768+scale(sx-(320<<15),xdim,320);
+			if (dastat&ROTATESPRITE_TOP) sy += 32768;
+			else if (dastat&ROTATESPRITE_BOTTOM) sy += ((ydim-200)<<16)+32768;
+			else sy += ((ydim-200)<<15)+32768;
+		}
+		z = mulscale16(z,x);
+	}
+	else
+#endif
 	if ((dastat&2) != 0)  //Auto window size scaling
 	{
 		if ((dastat&8) == 0)
@@ -4439,6 +4471,14 @@ static void dorotatesprite(int sx, int sy, int z, short a, short picnum, signed 
 
 	xv = mulscale14(cosang,z);
 	yv = mulscale14(sinang,z);
+#ifdef MISTER_HYBRID
+	if (dastat&2)
+	{
+		xv2 = mulscale16(xv,divscale16(xdim,320));
+		yv2 = mulscale16(yv,divscale16(xdim,320));
+	}
+	else
+#endif
 	if (((dastat&2) != 0 && (dastat&256) == 0) || ((dastat&8) == 0)) //Don't aspect unscaled perms
 	{
 		xv2 = mulscale16(xv,xyaspect);
@@ -4508,6 +4548,14 @@ static void dorotatesprite(int sx, int sy, int z, short a, short picnum, signed 
 	iv = divscale32(1L,z);
 	xv = mulscale14(sinang,iv);
 	yv = mulscale14(cosang,iv);
+#ifdef MISTER_HYBRID
+	if (dastat&2)
+	{
+		yv2 = mulscale16(-xv,divscale16(320,xdim));
+		xv2 = mulscale16(yv,divscale16(320,xdim));
+	}
+	else
+#endif
 	if (((dastat&2) != 0 && (dastat&256) == 0) || ((dastat&8) == 0)) //Don't aspect unscaled perms
 	{
 		yv2 = mulscale16(-xv,yxaspect);
@@ -7905,7 +7953,8 @@ int setgamemode(int dafullscreen, int daxdim, int daydim, int dabpp)
 	tallscreen = 0;
 #ifdef MISTER_HYBRID
 	// The core shows every mode on a 4:3 screen: 640x200 has two pixels in
-	// the place of each pixel of 320x200
+	// the place of each pixel of 320x200, and 240 lines are in the place of
+	// 200
 	if (1) {
 		pixelaspect = divscale16(ydim*320L,xdim*200L);
 	} else

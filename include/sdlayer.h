@@ -29,6 +29,11 @@ enum {
 // the clock is the core's field counter, and a field is not a whole number
 // of ticks.
 int gettimerfraction(void);
+
+// Main_MiSTer presses the d-pad as well when the left stick is tilted far.
+// Menus are moved with that; with 0 here, a d-pad direction the left stick
+// is tilted to does not count, for a game that has the stick as an axis.
+void setjoystickdpad(int enable);
 #endif
 
 #else

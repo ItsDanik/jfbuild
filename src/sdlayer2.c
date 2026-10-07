@@ -79,7 +79,7 @@ static char mouseacquired=0,moustat=0;
 static SDL_GameController *controller = NULL;
 #ifdef MISTER_HYBRID
 static SDL_Joystick *misterjoystick = NULL;
-static int misterjoybuttons = 0, misterjoyhat = 0;
+static int misterjoybuttons = 0, misterjoyhat = 0, misterjoystickdpad = 1;
 static void misterjoyupdate(void);
 #endif
 
@@ -823,9 +823,17 @@ void getvalidmodes(void)
 	if (validmodecnt) return;
 
 #ifdef MISTER_HYBRID
-	// The video modes of the core
-	addvalidmode(MH_WIDTH, MH_HEIGHT, 8, 0, 0, 0, -1);
-	addvalidmode(MH_MAX_WIDTH, MH_MAX_HEIGHT, 8, 0, 0, 0, -1);
+	// The video modes of the core at 15kHz, one frame per field
+	{
+		static const int modes[] = { MH_MODE_640x200, MH_MODE_320x240, MH_MODE_640x240 };
+
+		addvalidmode(MH_WIDTH, MH_HEIGHT, 8, 0, 0, 0, -1);
+		for (i = 0; i < (int)(sizeof(modes) / sizeof(modes[0])); i++) {
+			if (MH_ModeAvailable(modes[i])) {
+				addvalidmode(MH_ModeWidth(modes[i]), MH_ModeHeight(modes[i]), 8, 0, 0, 0, -1);
+			}
+		}
+	}
 	sortvalidmodes();
 	return;
 #endif
@@ -1562,6 +1570,7 @@ int handleevents(void)
 			case SDL_JOYAXISMOTION:
 				if (ev.jaxis.which == SDL_JoystickInstanceID(misterjoystick) && ev.jaxis.axis < 4) {
 					joyaxis[ ev.jaxis.axis ] = ev.jaxis.value;
+					misterjoyupdate();
 				}
 				break;
 
@@ -1622,10 +1631,21 @@ int handleevents(void)
 
 
 #ifdef MISTER_HYBRID
+// Main_MiSTer presses the d-pad from DPAD_THRESHOLD of MiSTer.ini on (half
+// way, 5% at the least): this is below that
+#define MISTERJOY_STICKDPAD (4 * 256)
+
 // joyb from the buttons and the d-pad of the core's joystick
 static void misterjoyupdate(void)
 {
-	int i, b = 0;
+	int i, b = 0, hat = misterjoyhat;
+
+	if (!misterjoystickdpad) {
+		if (joyaxis[0] < -MISTERJOY_STICKDPAD) hat &= ~SDL_HAT_LEFT;
+		if (joyaxis[0] > MISTERJOY_STICKDPAD) hat &= ~SDL_HAT_RIGHT;
+		if (joyaxis[1] < -MISTERJOY_STICKDPAD) hat &= ~SDL_HAT_UP;
+		if (joyaxis[1] > MISTERJOY_STICKDPAD) hat &= ~SDL_HAT_DOWN;
+	}
 
 	for (i = 0; i < MISTERJOY_NUMACTIONS; i++) {
 		if (misterjoybuttons & (1 << i)) b |= 1 << (MISTERJOY_ACTION1 + i);
@@ -1634,11 +1654,18 @@ static void misterjoyupdate(void)
 	// core's own Menu OK/Back buttons follow the actions.
 	if (misterjoybuttons & ((1 << 28) | (1 << MISTERJOY_NUMACTIONS))) b |= 1 << MISTERJOY_MENUOK;
 	if (misterjoybuttons & ((1 << 29) | (1 << (MISTERJOY_NUMACTIONS + 1)))) b |= 1 << MISTERJOY_MENUBACK;
-	if (misterjoyhat & SDL_HAT_UP) b |= 1 << MISTERJOY_DPADUP;
-	if (misterjoyhat & SDL_HAT_DOWN) b |= 1 << MISTERJOY_DPADDOWN;
-	if (misterjoyhat & SDL_HAT_LEFT) b |= 1 << MISTERJOY_DPADLEFT;
-	if (misterjoyhat & SDL_HAT_RIGHT) b |= 1 << MISTERJOY_DPADRIGHT;
+	if (hat & SDL_HAT_UP) b |= 1 << MISTERJOY_DPADUP;
+	if (hat & SDL_HAT_DOWN) b |= 1 << MISTERJOY_DPADDOWN;
+	if (hat & SDL_HAT_LEFT) b |= 1 << MISTERJOY_DPADLEFT;
+	if (hat & SDL_HAT_RIGHT) b |= 1 << MISTERJOY_DPADRIGHT;
 	joyb = b;
+}
+
+void setjoystickdpad(int enable)
+{
+	if (misterjoystickdpad == !!enable) return;
+	misterjoystickdpad = !!enable;
+	misterjoyupdate();
 }
 #endif
 
