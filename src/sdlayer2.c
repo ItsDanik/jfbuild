@@ -34,6 +34,14 @@
 # include "gtkbits.h"
 #endif
 #ifdef MISTER_HYBRID
+// Frame pacing: draw a frame up to two fields before it is shown (see
+// misterfield()), decided by benchmark (CLAUDE.md of jfSW_MiSTer).
+// MISTER_HYBRID_AHEAD=0 in the environment: the old way, every frame shown
+// at the next field, for comparing.
+#define MISTER_DRAW_AHEAD 0
+static int misterahead;
+#endif
+#ifdef MISTER_HYBRID
 // MiSTer hybrid core: the SDL "mister" drivers show the window on the core's
 // 15kHz screen and deliver its input (Hybrid_MiSTer, sdl2/)
 # include <mister_hybrid.h>
@@ -288,7 +296,9 @@ int main(int argc, char *argv[])
 	misterframestats = getenv("MISTER_HYBRID_STATS") != NULL;
 	// 8-bit frames, the core does the palette lookup; one frame per field
 	SDL_SetHint("SDL_MISTER_VIDEO_FORMAT", "INDEX8");
-	SDL_SetHint("SDL_MISTER_VSYNC", "1");
+	// waiting for the field is ours when drawing ahead (showframe())
+	misterahead = MISTER_DRAW_AHEAD && !(getenv("MISTER_HYBRID_AHEAD") && atoi(getenv("MISTER_HYBRID_AHEAD")) == 0);
+	SDL_SetHint("SDL_MISTER_VSYNC", misterahead ? "0" : "1");
 #endif
 
 	// SDL must be initialised before GTK or else crashing will ensue.
@@ -666,10 +676,34 @@ static void (*usertimercallback)(void) = NULL;
 static Uint32 timerfieldbase;
 static int timerfraction;
 
+// Drawing ahead (hybrid/CLAUDE.md, "Frame pacing"): every frame is drawn for
+// the field it is to be shown at, from two fields before it on, and handed
+// to the core with MH_PresentAtField(), so that one a little slower than a
+// field is still in time; one field more latency. The game's clock is that
+// field's time. A game that falls behind (loading, a menu that waits) is
+// given the next field: its time never stands still. MISTER_DRAW_AHEAD and
+// misterahead are at the top of this file.
+static Uint32 mistertarget;
+static int mistertargetvalid;
+
+// the field the frame being drawn is for
+static Uint32 misterfield(void)
+{
+	Uint32 field = MH_FieldCounter();
+
+	if (!misterahead || MH_Interlaced())
+		return field;
+	if (!mistertargetvalid || (Sint32)(field + 1 - mistertarget) > 0) {
+		mistertarget = field + 1;
+		mistertargetvalid = 1;
+	}
+	return mistertarget;
+}
+
 // ticks * 65536 since inittimer()
 static Uint64 mistertimer(void)
 {
-	Uint32 fields = MH_FieldCounter() - timerfieldbase;
+	Uint32 fields = misterfield() - timerfieldbase;
 	return (((Uint64)fields * timerticspersec * MISTER_FIELD_NUM) << 16) / MISTER_FIELD_DEN;
 }
 
@@ -1223,14 +1257,26 @@ void showframe(void)
 		pixels += winsurface->pitch;
 		in += bytesperline;
 	}
-	// waits for the next field of the core
-	SDL_UpdateWindowSurface(sdl_window);
+	if (misterahead && !MH_Interlaced()) {
+		// shown at the field it was drawn for; the next one is for the field
+		// after, and is not started before the field two before that
+		MH_PresentAtField(misterfield());
+		SDL_UpdateWindowSurface(sdl_window);
+		mistertarget++;
+		MH_WaitField(mistertarget - 3);
+	} else {
+		// waits for the next field of the core
+		SDL_UpdateWindowSurface(sdl_window);
+	}
 	if (misterframestats) {
 		// development: how many fields went by without a new frame
 		static Uint32 lastfield, sincefield, frames, missed;
 		Uint32 field = MH_FieldCounter();
 
 		if (frames > 0 && field - lastfield > 1) missed += field - lastfield - 1;
+		// a pause: when, and how long
+		if (frames > 0 && field - lastfield > 4)
+			buildprintf("mister: no frame for %u fields, at field %u (%.1fs)\n", field - lastfield, field, field / 59.64);
 		if (frames == 0) sincefield = field;
 		lastfield = field;
 		frames++;

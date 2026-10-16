@@ -41,6 +41,9 @@ void kfree(void *buffer) { Bfree(buffer); }
 
 void loadvoxel(int voxindex) { (void)voxindex; }
 int tiletovox[MAXTILES];
+#ifdef MISTER_HYBRID
+int rotatesprite_hudbottom = 0, rotatesprite_viewcover = 0;
+#endif
 int usevoxels = 1;
 #define kloadvoxel loadvoxel
 
@@ -4410,6 +4413,8 @@ static void dorotatesprite(int sx, int sy, int z, short a, short picnum, signed 
 
 #ifdef MISTER_HYBRID
 	// MiSTer: the art is shown as it was drawn, never stretched down the
+	// screen. The bottom is the HUD margin above the bottom edge, and the
+	// weapons are above a status bar that covers the view (build.h).
 	// screen. A row of it is a line of the screen, a column xdim/320 pixels
 	// (the core shows 640 pixels in the place of 320). On a screen of more
 	// than 200 lines:
@@ -4426,14 +4431,17 @@ static void dorotatesprite(int sx, int sy, int z, short a, short picnum, signed 
 		{
 			x = divscale16(xdimen,xdim);
 			sx = ((cx1+cx2+2)<<15)+scale(sx-(320<<15),xdimen,320);
-			sy = ((cy1+cy2+2)<<15)+mulscale16(sy-(200<<15)+((ydim-200)<<15),x);
+			sy = ((cy1+cy2+2)<<15)+mulscale16(sy-(200<<15)+((ydim-200)<<15),x)-(rotatesprite_viewcover<<16);
+			// and they end at the top of the status bar, as the view did
+			if (rotatesprite_viewcover && cy2 > ydim-1-rotatesprite_viewcover)
+				cy2 = ydim-1-rotatesprite_viewcover;
 		}
 		else
 		{
 			x = 65536;
 			sx = (xdim<<15)+32768+scale(sx-(320<<15),xdim,320);
 			if (dastat&ROTATESPRITE_TOP) sy += 32768;
-			else if (dastat&ROTATESPRITE_BOTTOM) sy += ((ydim-200)<<16)+32768;
+			else if (dastat&ROTATESPRITE_BOTTOM) sy += ((ydim-200-rotatesprite_hudbottom)<<16)+32768;
 			else sy += ((ydim-200)<<15)+32768;
 		}
 		z = mulscale16(z,x);

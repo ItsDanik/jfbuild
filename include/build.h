@@ -443,6 +443,12 @@ void   rotatesprite(int sx, int sy, int z, short a, short picnum, signed char da
 // dastat at its top or bottom.
 #define ROTATESPRITE_TOP 1024
 #define ROTATESPRITE_BOTTOM 2048
+// Set by the game, for a screen of more than 200 lines: the lines between
+// what is at the bottom (ROTATESPRITE_BOTTOM) and the bottom edge, the
+// player's HUD margin; and the lines at the bottom of the view a status bar
+// covers that is drawn over it, which the weapons (2 without 8) are drawn
+// above
+extern int rotatesprite_hudbottom, rotatesprite_viewcover;
 #endif
 void   drawline256(int x1, int y1, int x2, int y2, unsigned char col);
 void   printext256(int xpos, int ypos, short col, short backcol, const char *name, char fontsize);
