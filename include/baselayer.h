@@ -61,6 +61,11 @@ void initputs(const char *);
 void debugprintf(const char *,...) PRINTF_FORMAT(1, 2);
 
 int handleevents(void);
+// MiSTer: the gamepad's motors for ms (0..255 each); the engine keeps them going
+void misterrumble(int strong, int weak, int ms);
+// MiSTer: the OSD's Cheats page: God Mode and No Clipping as they stand, the
+// triggers (bit 0 Give All, bit 1 Next Level) once each time one is picked
+int mistercheatbits(int *god, int *clip);
 
 int initinput(void);
 void uninitinput(void);
