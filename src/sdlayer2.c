@@ -40,6 +40,41 @@
 // at the next field, for comparing.
 #define MISTER_DRAW_AHEAD 0
 static int misterahead;
+
+// Rumble: a game asks for a burst (misterrumble); the engine keeps the
+// library's MH_Rumble() fed every frame it presents while the burst lasts and
+// stops the motors when it is over
+static int misterrumblestrong, misterrumbleweak;
+static Uint32 misterrumbleuntil;
+int MH_Rumble(int strong, int weak); // mister_hybrid.h, included further down
+void misterrumble(int strong, int weak, int ms)
+{
+	Uint32 now = SDL_GetTicks();
+	if (strong > misterrumblestrong) misterrumblestrong = strong;
+	if (weak > misterrumbleweak) misterrumbleweak = weak;
+	if (!misterrumbleuntil || (Sint32)(now + ms - misterrumbleuntil) > 0) misterrumbleuntil = now + ms;
+	if (!misterrumbleuntil) misterrumbleuntil = 1;
+	{
+		static int said;
+		int any = MH_Rumble(misterrumblestrong, misterrumbleweak);
+		if (!said) {
+			said = 1;
+			buildprintf("mister: rumble %d/%d for %d ms: %s\n", misterrumblestrong, misterrumbleweak, ms,
+				any ? "a pad with rumble" : "no pad with rumble");
+		}
+	}
+}
+static void misterrumbletick(void)
+{
+	if (!misterrumbleuntil) return;
+	if ((Sint32)(SDL_GetTicks() - misterrumbleuntil) >= 0) {
+		misterrumblestrong = misterrumbleweak = 0;
+		misterrumbleuntil = 0;
+		MH_Rumble(0, 0);
+	} else {
+		MH_Rumble(misterrumblestrong, misterrumbleweak);
+	}
+}
 #endif
 #ifdef MISTER_HYBRID
 // MiSTer hybrid core: the SDL "mister" drivers show the window on the core's
@@ -88,6 +123,7 @@ static SDL_GameController *controller = NULL;
 #ifdef MISTER_HYBRID
 static SDL_Joystick *misterjoystick = NULL;
 static int misterjoybuttons = 0, misterjoyhat = 0, misterjoystickdpad = 1;
+static int misterfollowmodes = 0; // the OSD's Resolution line followed (misterfollowresolution)
 static void misterjoyupdate(void);
 #endif
 
@@ -1182,6 +1218,7 @@ int setvideomode(int xdim, int ydim, int bitspp, int fullsc)
 #endif
 
 	videomodereset = 0;
+	misterfollowmodes = 1;
 	if (baselayer_videomodedidchange) baselayer_videomodedidchange();
 	OSD_ResizeDisplay(xres,yres);
 
@@ -1257,6 +1294,7 @@ void showframe(void)
 		pixels += winsurface->pitch;
 		in += bytesperline;
 	}
+	misterrumbletick();
 	if (misterahead && !MH_Interlaced()) {
 		// shown at the field it was drawn for; the next one is for the field
 		// after, and is not started before the field two before that
@@ -1467,8 +1505,57 @@ static void loadappicon(void)
 // handleevents() -- process the SDL message queue
 //   returns !0 if there was an important event worth checking (like quitting)
 //
+// The OSD's Resolution line (status bits 24..25) followed while the game
+// runs: the mode is set again when the option changes, from the first mode
+// the game set on. A mode the core does not have is the one of 200 lines.
+// The OSD's Cheats page (jfSW.sv): God Mode (status bit 33) and No Clipping
+// (bit 34) as they stand, the triggers Give All (T56) and Next Level (T57) as
+// bits 0 and 1 of the result, once each time one is picked. A game reads it
+// once a frame; a change is logged.
+int mistercheatbits(int *god, int *clip)
+{
+	static int lastgod = -1, lastclip = -1, lastopen = -1;
+	static uint64_t laststatus, lasthigh;
+	uint64_t status = MH_IsOpen() ? MH_OSDStatus() : 0;
+	uint64_t high = MH_IsOpen() ? MH_OSDStatusHigh() : 0;
+	int triggers = MH_IsOpen() ? MH_OSDTriggers() : 0;
+	int open = MH_IsOpen() ? MH_OSDOpen() : 0;
+
+	*god = MH_OSD_GAME_BITS(status, 33, 1);
+	*clip = MH_OSD_GAME_BITS(status, 34, 1);
+	if (open != lastopen) { // the OSD's menu shown or hidden (the game's input is held back meanwhile)
+		buildprintf("mister: osd %s\n", open ? "open" : "closed");
+		lastopen = open;
+	}
+	if (status != laststatus || high != lasthigh || *god != lastgod || *clip != lastclip || triggers) {
+		buildprintf("mister: cheats god %d noclip %d triggers %x (status %08x%08x high %08x%08x)\n", *god, *clip, triggers,
+			(unsigned)(status >> 32), (unsigned)status, (unsigned)(high >> 32), (unsigned)high);
+		laststatus = status;
+		lasthigh = high;
+		lastgod = *god;
+		lastclip = *clip;
+	}
+	return triggers;
+}
+
+static void misterfollowresolution(void)
+{
+	static const int modes[4] = { MH_MODE_320x200, MH_MODE_640x200, MH_MODE_320x240, MH_MODE_640x240 };
+	static int lastmode = -1;
+	int mode;
+
+	if (!misterfollowmodes || !MH_IsOpen()) return;
+	mode = modes[MH_OSD_GAME_BITS(MH_OSDStatus(), 24, 2)];
+	if (!MH_ModeAvailable(mode)) mode = MH_ModeWidth(mode) == 640 ? MH_MODE_640x200 : MH_MODE_320x200;
+	if (mode == lastmode) return;
+	lastmode = mode;
+	if (MH_ModeWidth(mode) != xdim || MH_ModeHeight(mode) != ydim)
+		setgamemode(fullscreen, MH_ModeWidth(mode), MH_ModeHeight(mode), 8);
+}
+
 int handleevents(void)
 {
+	misterfollowresolution();
 	int code, rv=0, j, control;
 	SDL_Event ev;
 	static int firstcall = 1;
@@ -1705,6 +1792,28 @@ static void misterjoyupdate(void)
 	if (hat & SDL_HAT_LEFT) b |= 1 << MISTERJOY_DPADLEFT;
 	if (hat & SDL_HAT_RIGHT) b |= 1 << MISTERJOY_DPADRIGHT;
 	joyb = b;
+
+	// The pad as keys for the game's own menus (they read keystatus[] alone):
+	// the d-pad is the arrow keys, Menu OK (A on the Pro 2) is Enter, Start
+	// is Escape: the one button that opens and leaves the menus (Jess,
+	// 2026-11-16: the library's Menu Back fell on A and opened TekWar's menu).
+	// Build scan codes, pressed and released with the buttons.
+	{
+		static const struct { int bit, key; } padkeys[] = {
+			{ MISTERJOY_DPADUP, 0xc8 }, { MISTERJOY_DPADDOWN, 0xd0 },
+			{ MISTERJOY_DPADLEFT, 0xcb }, { MISTERJOY_DPADRIGHT, 0xcd },
+			{ MISTERJOY_MENUOK, 0x1c }, { MISTERJOY_ACTION1 + 7, 0x01 },
+		};
+		static int lastb = 0;
+		int changed = b ^ lastb, k;
+
+		for (k = 0; k < (int)(sizeof padkeys / sizeof padkeys[0]); k++) {
+			if (changed & (1 << padkeys[k].bit)) {
+				keystatus[padkeys[k].key] = (b >> padkeys[k].bit) & 1;
+			}
+		}
+		lastb = b;
+	}
 }
 
 void setjoystickdpad(int enable)
