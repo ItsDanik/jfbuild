@@ -10875,6 +10875,11 @@ void printext256(int xpos, int ypos, short col, short backcol, const char *name,
 	f = &textfonts[min((unsigned)fontsize, 2)];
 	stx = xpos;
 
+	// MiSTer: in the core's 640x200 and 640x240 modes a pixel is half as
+	// wide as in 320x200 (the screen is 4:3 at every size), so a font column
+	// is drawn two pixels wide to keep the text's shape
+	const int xs = (xdim == 640 && ydim <= 240) ? 2 : 1;
+
 	for(i=0;name[i];i++)
 	{
 		letptr = &f->font[((int)(unsigned char)name[i])*f->cellh + f->cellyoff];
@@ -10884,13 +10889,13 @@ void printext256(int xpos, int ypos, short col, short backcol, const char *name,
 			for(x=f->charxsiz-1;x>=0;x--)
 			{
 				if (letptr[y]&pow2char[7-x-f->cellxoff])
-					ptr[x] = (unsigned char)col;
+					ptr[x*xs] = ptr[x*xs+xs-1] = (unsigned char)col;
 				else if (backcol >= 0)
-					ptr[x] = (unsigned char)backcol;
+					ptr[x*xs] = ptr[x*xs+xs-1] = (unsigned char)backcol;
 			}
 			ptr -= bytesperline;
 		}
-		stx += f->charxsiz;
+		stx += f->charxsiz*xs;
 	}
 }
 
