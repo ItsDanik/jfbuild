@@ -123,6 +123,7 @@ static SDL_GameController *controller = NULL;
 #ifdef MISTER_HYBRID
 static SDL_Joystick *misterjoystick = NULL;
 static int misterjoybuttons = 0, misterjoyhat = 0, misterjoystickdpad = 1;
+int misterjoydpadstrafekey = 0;   // the game's strafe modifier scan code: held with d-pad left/right (patch_dpadstrafe.py)
 static int misterfollowmodes = 0; // the OSD's Resolution line followed (misterfollowresolution)
 static void misterjoyupdate(void);
 #endif
@@ -1811,6 +1812,10 @@ static void misterjoyupdate(void)
 			if (changed & (1 << padkeys[k].bit)) {
 				keystatus[padkeys[k].key] = (b >> padkeys[k].bit) & 1;
 			}
+		}
+		// d-pad left/right strafe: the game's strafe modifier key goes down with them
+		if (misterjoydpadstrafekey && (changed & ((1 << MISTERJOY_DPADLEFT) | (1 << MISTERJOY_DPADRIGHT)))) {
+			keystatus[misterjoydpadstrafekey & 0xff] = (b & ((1 << MISTERJOY_DPADLEFT) | (1 << MISTERJOY_DPADRIGHT))) != 0;
 		}
 		lastb = b;
 	}
